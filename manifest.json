@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "ContextClock",
+  "version": "1.0",
+  "description": "Adds real-world temporal context to AI chatbot conversations.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "*://chatgpt.com/*",
+    "*://claude.ai/*",
+    "*://gemini.google.com/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://chatgpt.com/*",
+        "*://claude.ai/*",
+        "*://gemini.google.com/*"
+      ],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
