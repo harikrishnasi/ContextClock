@@ -17,10 +17,18 @@ chrome.storage.sync.get({
   init();
 });
 
+function syncSettingsToInjected() {
+  window.postMessage({
+    type: 'CONTEXT_CLOCK_SYNC',
+    settings: settings
+  }, '*');
+}
+
 chrome.storage.onChanged.addListener((changes) => {
   for (let [key, { newValue }] of Object.entries(changes)) {
     settings[key] = newValue;
   }
+  syncSettingsToInjected();
 });
 
 function init() {
@@ -31,7 +39,83 @@ function init() {
   if (hostname.includes('chatgpt.com') && settings.platformChatGPT) {
     setupObserver(PLATFORMS.chatgpt);
   } else if (hostname.includes('claude.ai') && settings.platformClaude) {
-    setupObserver(PLATFORMS.claude);
+
+    
+    // Send initial settings
+    setTimeout(syncSettingsToInjected, 100);
+    
+    // Listen for successful send from fetch interceptor to update timer and visually update UI
+    window.addEventListener('message', (event) => {
+      if (event.source !== window || !event.data) return;
+      if (event.data.type === 'CONTEXT_CLOCK_SENT') {
+        const now = Date.now();
+        chrome.storage.sync.set({ lastMessageTime_claude: now });
+        settings.lastMessageTime_claude = now;
+        syncSettingsToInjected();
+
+        // Visually update the UI so the user sees the timestamp immediately
+        if (event.data.timestampStr) {
+          let attempts = 0;
+          const injectVisual = setInterval(() => {
+            attempts++;
+            if (attempts > 40) { // Give up after 2 seconds
+              clearInterval(injectVisual);
+              return;
+            }
+
+            const userMessages = document.querySelectorAll('[data-testid="user-message"]');
+            if (userMessages.length > 0) {
+              const lastMessage = userMessages[userMessages.length - 1];
+              const textContainer = lastMessage.querySelector('.whitespace-pre-wrap') || lastMessage.querySelector('div') || lastMessage;
+              
+              // Only inject if the bubble doesn't already have our exact timestamp string
+              // If lastMessage is still the PREVIOUS message, it will skip and keep polling until Claude renders the new one!
+              if (!textContainer.innerText.includes(event.data.timestampStr) && !textContainer.querySelector('span[data-cc-injected]')) {
+                 clearInterval(injectVisual); // Success, stop polling!
+
+                 const span = document.createElement('span');
+                 span.setAttribute('data-cc-injected', 'true');
+                 span.style.opacity = '0.6'; // Make it look like subtle metadata
+                 span.innerText = event.data.timestampStr;
+                 
+                 let br1 = document.createElement('br');
+                 let br2 = document.createElement('br');
+                 
+                 if (settings.positionTop) {
+                   textContainer.prepend(br1, br2);
+                   textContainer.prepend(span);
+                 } else {
+                   textContainer.appendChild(br1);
+                   textContainer.appendChild(br2);
+                   textContainer.appendChild(span);
+                 }
+
+                 // Cleanup once Claude's backend syncs the text
+                 const cleanup = setInterval(() => {
+                   if (!span.isConnected) {
+                     clearInterval(cleanup);
+                   } else {
+                     let container = span.closest('[data-testid="user-message"]') || span.parentNode;
+                     if (container) {
+                       const text = container.textContent;
+                       const str = event.data.timestampStr;
+                       if (text.indexOf(str) !== -1 && text.indexOf(str) !== text.lastIndexOf(str)) {
+                         span.remove();
+                         if (br1.isConnected) br1.remove();
+                         if (br2.isConnected) br2.remove();
+                         clearInterval(cleanup);
+                       }
+                     }
+                   }
+                 }, 300);
+                 
+                 setTimeout(() => clearInterval(cleanup), 30000); // fallback
+              }
+            }
+          }, 50); // fast polling every 50ms
+        }
+      }
+    });
   } else if (hostname.includes('gemini.google.com') && settings.platformGemini) {
     setupObserver(PLATFORMS.gemini);
   }
@@ -45,8 +129,37 @@ const PLATFORMS = {
   },
   claude: {
     name: 'Claude',
-    getEditor: () => document.querySelector('div[contenteditable="true"]'),
-    getSendButton: () => document.querySelector('button[aria-label="Send Message"]')
+    getEditor: () => document.querySelector('[data-testid="chat-input"]'),
+    getSendButton: () => document.querySelector('button[aria-label="Send Message"]') || document.querySelector('button[aria-label="Send message"]'),
+    inject: (editor, textToInsert, atTop) => {
+      editor.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      
+      if (atTop) {
+        range.setStart(editor.firstChild || editor, 0);
+        range.collapse(true);
+      } else {
+        let targetNode = editor;
+        while (targetNode.lastChild) {
+          targetNode = targetNode.lastChild;
+        }
+        if (targetNode.nodeType === Node.TEXT_NODE) {
+          range.setStart(targetNode, targetNode.length);
+          range.collapse(true);
+        } else if (targetNode.nodeName === 'BR') {
+          range.setStartAfter(targetNode);
+          range.collapse(true);
+        } else {
+          range.selectNodeContents(targetNode);
+          range.collapse(false);
+        }
+      }
+      
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand('insertText', false, textToInsert);
+    }
   },
   gemini: {
     name: 'Gemini',
@@ -103,9 +216,9 @@ function handleSend(platform, editor) {
   const timestampStr = generateTimestamp(platform);
   
   if (settings.positionTop) {
-    injectText(editor, timestampStr + '\n\n', true);
+    injectText(platform, editor, timestampStr + '\n\n', true);
   } else {
-    injectText(editor, '\n\n' + timestampStr, false);
+    injectText(platform, editor, '\n\n' + timestampStr, false);
   }
 
   const now = Date.now();
@@ -114,7 +227,12 @@ function handleSend(platform, editor) {
   settings[key] = now;
 }
 
-function injectText(editor, textToInsert, atTop) {
+function injectText(platform, editor, textToInsert, atTop) {
+  if (platform.inject) {
+    platform.inject(editor, textToInsert, atTop);
+    return;
+  }
+
   editor.focus();
   
   const selection = window.getSelection();
@@ -124,10 +242,22 @@ function injectText(editor, textToInsert, atTop) {
     range.selectNodeContents(editor);
     range.collapse(true); 
   } else {
-    // Safely append inside the last paragraph/node to prevent AI editors from moving it to the top
-    const targetNode = editor.lastChild || editor;
-    range.selectNodeContents(targetNode);
-    range.collapse(false);
+    // Safely find the deepest last node to prevent AI editors (ProseMirror) from rejecting the insertion
+    let targetNode = editor;
+    while (targetNode.lastChild) {
+      targetNode = targetNode.lastChild;
+    }
+    
+    if (targetNode.nodeType === Node.TEXT_NODE) {
+      range.setStart(targetNode, targetNode.length);
+      range.collapse(true);
+    } else if (targetNode.nodeName === 'BR') {
+      range.setStartAfter(targetNode);
+      range.collapse(true);
+    } else {
+      range.selectNodeContents(targetNode);
+      range.collapse(false);
+    }
   }
   
   selection.removeAllRanges();
