@@ -1,3 +1,6 @@
+<img width="1536" height="1024" alt="Convo screensht" src="https://github.com/user-attachments/assets/370dbba2-b91f-468b-b994-d0d90228af53" />
+
+
 # ContextClock
 
 AI chatbots understand conversations. They don't understand time.
@@ -23,3 +26,5 @@ No analytics.
 No tracking.
 No external servers.
 Everything runs locally on your machine.
+<img width="1024" height="1536" alt="linkedin post v1" src="https://github.com/user-attachments/assets/0770a960-0deb-45c4-8759-4b8294341560" />
+<img width="1280" height="800" alt="Works with" src="https://github.com/user-attachments/assets/93a99115-9ca3-40a5-bcef-e4fe0c032103" />
